@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Fact Stake</title>
+  <meta name="description" content="Stake GEN on a dated public fact. Two official pages decide if the stake returns or stays locked." />
+  <link rel="stylesheet" href="static/style.css" />
+</head>
+<body>
+  <div class="grain" aria-hidden="true"></div>
+  <header class="top">
+    <a class="brand" href="#top">
+      <div class="mark"><img src="/static/fact_stake_logo.jpg" alt="brand_logo"></div>
+      <div class="brand-copy">
+        <strong>Fact Stake</strong><br>
+        <small>GenLayer StudioNet</small>
+      </div>
+    </a>
+    <div class="top-actions">
+        <span id="net-pill" class="pill">Disconnected</span>
+        <button id="connect-btn" type="button">Connect wallet</button>
+        <button id="disconnect-btn" class="ghost hidden" type="button">Disconnect</button>
+    </div>
+  </header>
+
+  <main id="top">
+    <section class="hero">
+      <p class="eyebrow">Oracle escrow</p>
+      <h1>Stake a fact.<br />Let two pages decide.</h1>
+      <p class="lede">
+        Lock GEN against a dated public claim. Validators fetch two official sources.
+        If they agree it is true, your stake returns and the fact is attested.
+        If they agree it is false, the contract keeps the stake.
+      </p>
+      <div class="hero-meta">
+        <a id="contract-link" href="https://explorer-studio.genlayer.com/address/0x65B4e18C0483937d71A4745bF0aA75e948229F5d" target="_blank" rel="noreferrer">
+          0x65B4e18C0483937d71A4745bF0aA75e948229F5d
+        </a>
+        <span>chain 61999 · 0xf22f</span>
+      </div>
+    </section>
+
+    <section class="stats" id="stats">
+      <article>
+        <span>Attestations</span>
+        <strong id="stat-count">—</strong>
+      </article>
+      <article>
+        <span>Reserved</span>
+        <strong id="stat-reserved">—</strong>
+      </article>
+      <article>
+        <span>Retained</span>
+        <strong id="stat-retained">—</strong>
+      </article>
+    </section>
+
+    <section class="board">
+      <article class="panel">
+        <header>
+          <h2>Create</h2>
+          <p>Lock a stake on a dated claim and two official URLs.</p>
+        </header>
+        <form id="create-form">
+          <label>
+            Claim
+            <textarea id="claim" rows="3" required placeholder="Did Team X win the final on 2026-09-08?"></textarea>
+          </label>
+          <div class="row">
+            <label>
+              Event date
+              <input id="event-date" type="text" required placeholder="2026-09-08" autocomplete="off" />
+            </label>
+            <label>
+              Stake (GEN)
+              <input id="stake" type="text" required placeholder="0.1" inputmode="decimal" />
+            </label>
+          </div>
+          <label>
+            Official source A
+            <input id="url-a" type="url" required placeholder="https://www.bbc.com/..." />
+          </label>
+          <label>
+            Official source B
+            <input id="url-b" type="url" required placeholder="https://www.reuters.com/..." />
+          </label>
+          <button type="submit">Lock attestation</button>
+        </form>
+      </article>
+
+      <article class="panel">
+        <header>
+          <h2>Resolve</h2>
+          <p>Anyone can settle. Inconclusive results stay open.</p>
+        </header>
+        <form id="resolve-form">
+          <label>
+            Attestation ID
+            <input id="resolve-id" type="text" required placeholder="1" />
+          </label>
+          <button type="submit">Resolve</button>
+        </form>
+
+        <header class="subhead">
+          <h2>Lookup</h2>
+          <p>Read status, verdict, and where the GEN went.</p>
+        </header>
+        <form id="lookup-form">
+          <label>
+            Attestation ID
+            <input id="lookup-id" type="text" required placeholder="1" />
+          </label>
+          <button type="submit" class="ghost">Inspect</button>
+        </form>
+        <pre id="lookup-out" class="out empty">No attestation loaded.</pre>
+      </article>
+    </section>
+
+    <section class="activity">
+      <h2>Activity</h2>
+      <p id="status-msg">Connect a wallet on StudioNet to write.</p>
+      <a id="tx-link" class="tx hidden" target="_blank" rel="noreferrer"></a>
+    </section>
+  </main>
+
+  <footer>
+    <p>Fact Stake · dual-source attestation escrow on GenLayer.</p>
+    <nav>
+      <a href="https://docs.genlayer.com" target="_blank" rel="noreferrer">Docs</a>
+      <a href="https://studio.genlayer.com" target="_blank" rel="noreferrer">Studio</a>
+      <a href="https://github.com/001grindpa" target="_blank" rel="noreferrer">GitHub</a>
+    </nav>
+  </footer>
+
+  <script type="module" src="static/app.js"></script>
+</body>
+</html>
