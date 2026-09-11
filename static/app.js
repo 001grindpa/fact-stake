@@ -11,6 +11,15 @@ const DATE_RE = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
 const WALLET_KEY = "factstake.wallet";
 const WALLET_RDNS_KEY = "factstake.wallet.rdns";
 
+console.log("[factstake] studionet", {
+  id: studionet?.id,
+  name: studionet?.name,
+  rpc: studionet?.rpcUrls,
+  consensusMainContract: studionet?.consensusMainContract,
+  consensusDataContract: studionet?.consensusDataContract,
+  keys: studionet ? Object.keys(studionet) : null,
+});
+
 const state = {
   account: null,
   provider: null,
@@ -124,6 +133,7 @@ function injectedProviders() {
 
 function pickProvider(preferredRdns) {
   const list = injectedProviders();
+  console.log("[factstake] providers", list.map((w) => ({ rdns: w.rdns, name: w.name })));
   if (!list.length) throw new Error("No injected wallet found. Install MetaMask or OKX Wallet.");
   if (preferredRdns) {
     const match = list.find((w) => w.rdns === preferredRdns);
@@ -138,7 +148,8 @@ async function ensureNetwork(provider) {
   const injected = provider || state.provider || window.ethereum;
   if (!injected) throw new Error("No injected wallet found.");
   const current = await injected.request({ method: "eth_chainId" });
-  if (Number.parseInt(String(current), 16) !== CHAIN_ID) {
+  console.log("[factstake] wallet chainId", current, "expected", CHAIN_HEX, CHAIN_ID);
+  if (Number.parseInt(String(current), 16) !== Number(CHAIN_ID)) {
     try {
       await injected.request({
         method: "wallet_switchEthereumChain",
@@ -167,37 +178,55 @@ async function ensureNetwork(provider) {
 }
 
 async function read(method, args = []) {
+  const account = state.account || ZERO;
+  console.log("[factstake] read", { method, args, account, contract: CONTRACT_ADDRESS });
   return state.readClient.readContract({
     address: CONTRACT_ADDRESS,
     functionName: method,
     args,
     stateStatus: "accepted",
-    account: state.account || ZERO,
+    account,
   });
 }
 
-async function write(functionName, args, value = 0n) {
-  if (!state.writeClient || !state.account) throw new Error("Connect a wallet first.");
-  return state.writeContract
-    ? state.writeContract
-    : state.writeClient.writeContract({
-        address: CONTRACT_ADDRESS,
-        functionName,
-        args,
-        value,
-        account: state.account,
-      });
-}
-
 async function sendWrite(functionName, args, value = 0n) {
-  if (!state.writeClient || !state.account) throw new Error("Connect a wallet first.");
-  return state.writeClient.writeContract({
+  if (!state.account) throw new Error("Connect a wallet first.");
+  const provider = state.provider || window.ethereum;
+  if (!provider) throw new Error("No injected wallet found.");
+  state.writeClient = createClient({
+    chain: studionet,
+    account: state.account,
+    provider,
+  });
+  const payload = {
     address: CONTRACT_ADDRESS,
     functionName,
     args,
     value,
-    account: state.account,
+  };
+  console.log("[factstake] writeContract payload", {
+    ...payload,
+    value: value.toString(),
+    provider: {
+      isMetaMask: Boolean(provider.isMetaMask),
+      isOkxWallet: Boolean(provider.isOkxWallet || provider.isOKXWallet),
+    },
   });
+  try {
+    const hash = await state.writeClient.writeContract(payload);
+    console.log("[factstake] writeContract hash", hash);
+    return hash;
+  } catch (err) {
+    console.error("[factstake] writeContract error", err);
+    console.error("[factstake] writeContract error fields", {
+      message: err?.message,
+      shortMessage: err?.shortMessage,
+      details: err?.details,
+      metaMessages: err?.metaMessages,
+      cause: err?.cause,
+    });
+    throw err;
+  }
 }
 
 async function refreshStats() {
@@ -207,10 +236,12 @@ async function refreshStats() {
       read("get_reserved_stakes"),
       read("get_retained_stakes"),
     ]);
+    console.log("[factstake] stats", { count, reserved, retained });
     $("stat-count").textContent = String(count ?? "0");
     $("stat-reserved").textContent = formatGen(reserved ?? 0);
     $("stat-retained").textContent = formatGen(retained ?? 0);
-  } catch {
+  } catch (err) {
+    console.error("[factstake] stats error", err);
     $("stat-count").textContent = "—";
     $("stat-reserved").textContent = "—";
     $("stat-retained").textContent = "—";
@@ -220,6 +251,7 @@ async function refreshStats() {
 function bindProviderEvents(provider) {
   if (!provider?.on) return;
   provider.on("accountsChanged", (accounts) => {
+    console.log("[factstake] accountsChanged", accounts);
     if (!accounts?.length) {
       disconnectWallet();
       return;
@@ -230,8 +262,10 @@ function bindProviderEvents(provider) {
 
 async function connectWallet(preferredAccount, preferredRdns) {
   const selected = pickProvider(preferredRdns || localStorage.getItem(WALLET_RDNS_KEY));
+  console.log("[factstake] connect with", selected.name, selected.rdns);
   const provider = selected.provider;
   const accounts = await provider.request({ method: "eth_requestAccounts" });
+  console.log("[factstake] accounts", accounts);
   if (!accounts?.length) throw new Error("No account returned.");
   const account =
     preferredAccount && accounts.some((a) => a.toLowerCase() === preferredAccount.toLowerCase())
@@ -245,11 +279,11 @@ async function connectWallet(preferredAccount, preferredRdns) {
     account: state.account,
     provider,
   });
-  if (typeof state.writeClient.connect === "function") {
-    try {
-      await state.writeClient.connect("studionet");
-    } catch {}
-  }
+  console.log("[factstake] writeClient created", {
+    account: state.account,
+    clientAccount: state.writeClient?.account,
+    chainId: state.writeClient?.chain?.id,
+  });
   persistWallet(state.account);
   localStorage.setItem(WALLET_RDNS_KEY, selected.rdns);
   bindProviderEvents(provider);
@@ -268,6 +302,7 @@ function disconnectWallet() {
 
 async function restoreWallet() {
   const stored = savedWallet();
+  console.log("[factstake] restore", stored);
   if (!stored) {
     await refreshStats();
     return;
@@ -275,13 +310,15 @@ async function restoreWallet() {
   try {
     const selected = pickProvider(localStorage.getItem(WALLET_RDNS_KEY));
     const silent = await selected.provider.request({ method: "eth_accounts" });
+    console.log("[factstake] silent accounts", silent);
     if (!silent?.length) {
       setDisconnectedUi();
       await refreshStats();
       return;
     }
     await connectWallet(stored, selected.rdns);
-  } catch {
+  } catch (err) {
+    console.warn("[factstake] restore failed", err);
     setDisconnectedUi();
   }
   await refreshStats();
@@ -292,6 +329,7 @@ $("connect-btn").addEventListener("click", async () => {
     await connectWallet();
     await refreshStats();
   } catch (err) {
+    console.error("[factstake] connect click failed", err);
     setStatus(err.message || String(err), "err");
   }
 });
@@ -311,12 +349,14 @@ $("create-form").addEventListener("submit", async (event) => {
     if (claim.length < 12) throw new Error("Claim must be at least 12 characters.");
     if (!DATE_RE.test(eventDate)) throw new Error("Event date must be YYYY-MM-DD.");
     const value = parseGen($("stake").value);
+    console.log("[factstake] parsed stake", value.toString());
     setStatus("Submitting create_attestation…");
     const hash = await sendWrite("create_attestation", [claim, eventDate, urlA, urlB], value);
     showTx(hash);
     setStatus("Attestation submitted. Check the explorer, then lookup the next ID.", "ok");
     await refreshStats();
   } catch (err) {
+    console.error("[factstake] create failed", err);
     setStatus(err.message || String(err), "err");
   }
 });
@@ -332,6 +372,7 @@ $("resolve-form").addEventListener("submit", async (event) => {
     showTx(hash);
     setStatus("Resolve submitted.", "ok");
   } catch (err) {
+    console.error("[factstake] resolve failed", err);
     setStatus(err.message || String(err), "err");
   }
 });
@@ -342,11 +383,13 @@ $("lookup-form").addEventListener("submit", async (event) => {
   try {
     const id = $("lookup-id").value.trim();
     const raw = await read("get_attestation", [id]);
+    console.log("[factstake] lookup raw", raw);
     const parsed = parseMaybeJson(raw);
     out.classList.remove("empty");
     out.textContent = JSON.stringify(parsed, null, 2);
     setStatus(`Loaded attestation ${id}.`, "ok");
   } catch (err) {
+    console.error("[factstake] lookup failed", err);
     out.classList.add("empty");
     out.textContent = "No attestation loaded.";
     setStatus(err.message || String(err), "err");
