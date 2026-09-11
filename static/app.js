@@ -9,12 +9,28 @@ const EXPLORER = "https://explorer-studio.genlayer.com";
 const ZERO = "0x0000000000000000000000000000000000000000";
 const DATE_RE = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
 const WALLET_KEY = "factstake.wallet";
+const WALLET_RDNS_KEY = "factstake.wallet.rdns";
 
 const state = {
   account: null,
+  provider: null,
   readClient: createClient({ chain: studionet, endpoint: RPC_URL, account: ZERO }),
   writeClient: null,
 };
+
+const wallets = [];
+
+window.addEventListener("eip6963:announceProvider", (event) => {
+  const { info, provider } = event.detail || {};
+  if (!provider || !info?.rdns) return;
+  if (wallets.some((w) => w.rdns === info.rdns)) return;
+  wallets.push({
+    rdns: info.rdns,
+    name: info.name || info.rdns,
+    provider,
+  });
+});
+window.dispatchEvent(new Event("eip6963:requestProvider"));
 
 const $ = (id) => document.getElementById(id);
 
@@ -84,25 +100,54 @@ function persistWallet(account) {
 
 function clearWallet() {
   localStorage.removeItem(WALLET_KEY);
+  localStorage.removeItem(WALLET_RDNS_KEY);
 }
 
 function savedWallet() {
   return localStorage.getItem(WALLET_KEY);
 }
 
-async function ensureNetwork() {
-  if (!window.ethereum) throw new Error("No injected wallet found.");
-  const current = await window.ethereum.request({ method: "eth_chainId" });
+function injectedProviders() {
+  const list = [...wallets];
+  if (window.okxwallet && !list.some((w) => w.provider === window.okxwallet)) {
+    list.push({ rdns: "com.okex.wallet", name: "OKX Wallet", provider: window.okxwallet });
+  }
+  if (window.ethereum && !list.some((w) => w.provider === window.ethereum)) {
+    list.push({
+      rdns: window.ethereum.isOkxWallet || window.ethereum.isOKXWallet ? "com.okex.wallet" : "injected",
+      name: window.ethereum.isOkxWallet || window.ethereum.isOKXWallet ? "OKX Wallet" : "Injected",
+      provider: window.ethereum,
+    });
+  }
+  return list;
+}
+
+function pickProvider(preferredRdns) {
+  const list = injectedProviders();
+  if (!list.length) throw new Error("No injected wallet found. Install MetaMask or OKX Wallet.");
+  if (preferredRdns) {
+    const match = list.find((w) => w.rdns === preferredRdns);
+    if (match) return match;
+  }
+  const okx = list.find((w) => /okx|okex/i.test(`${w.rdns} ${w.name}`));
+  const metamask = list.find((w) => /metamask/i.test(`${w.rdns} ${w.name}`));
+  return metamask || okx || list[0];
+}
+
+async function ensureNetwork(provider) {
+  const injected = provider || state.provider || window.ethereum;
+  if (!injected) throw new Error("No injected wallet found.");
+  const current = await injected.request({ method: "eth_chainId" });
   if (Number.parseInt(String(current), 16) !== CHAIN_ID) {
     try {
-      await window.ethereum.request({
+      await injected.request({
         method: "wallet_switchEthereumChain",
         params: [{ chainId: CHAIN_HEX }],
       });
     } catch (error) {
       const code = error?.code ?? error?.data?.originalError?.code ?? error?.error?.code;
       if (code === 4902) {
-        await window.ethereum.request({
+        await injected.request({
           method: "wallet_addEthereumChain",
           params: [
             {
@@ -133,6 +178,19 @@ async function read(method, args = []) {
 
 async function write(functionName, args, value = 0n) {
   if (!state.writeClient || !state.account) throw new Error("Connect a wallet first.");
+  return state.writeContract
+    ? state.writeContract
+    : state.writeClient.writeContract({
+        address: CONTRACT_ADDRESS,
+        functionName,
+        args,
+        value,
+        account: state.account,
+      });
+}
+
+async function sendWrite(functionName, args, value = 0n) {
+  if (!state.writeClient || !state.account) throw new Error("Connect a wallet first.");
   return state.writeClient.writeContract({
     address: CONTRACT_ADDRESS,
     functionName,
@@ -159,20 +217,33 @@ async function refreshStats() {
   }
 }
 
-async function connectWallet(preferred) {
-  if (!window.ethereum) throw new Error("Install MetaMask or another EIP-1193 wallet.");
-  const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
+function bindProviderEvents(provider) {
+  if (!provider?.on) return;
+  provider.on("accountsChanged", (accounts) => {
+    if (!accounts?.length) {
+      disconnectWallet();
+      return;
+    }
+    connectWallet(accounts[0]).catch((err) => setStatus(err.message || String(err), "err"));
+  });
+}
+
+async function connectWallet(preferredAccount, preferredRdns) {
+  const selected = pickProvider(preferredRdns || localStorage.getItem(WALLET_RDNS_KEY));
+  const provider = selected.provider;
+  const accounts = await provider.request({ method: "eth_requestAccounts" });
   if (!accounts?.length) throw new Error("No account returned.");
   const account =
-    preferred && accounts.some((a) => a.toLowerCase() === preferred.toLowerCase())
-      ? accounts.find((a) => a.toLowerCase() === preferred.toLowerCase())
+    preferredAccount && accounts.some((a) => a.toLowerCase() === preferredAccount.toLowerCase())
+      ? accounts.find((a) => a.toLowerCase() === preferredAccount.toLowerCase())
       : accounts[0];
-  await ensureNetwork();
+  await ensureNetwork(provider);
   state.account = account;
+  state.provider = provider;
   state.writeClient = createClient({
     chain: studionet,
     account: state.account,
-    provider: window.ethereum,
+    provider,
   });
   if (typeof state.writeClient.connect === "function") {
     try {
@@ -180,16 +251,40 @@ async function connectWallet(preferred) {
     } catch {}
   }
   persistWallet(state.account);
+  localStorage.setItem(WALLET_RDNS_KEY, selected.rdns);
+  bindProviderEvents(provider);
   setConnectedUi(state.account);
-  setStatus("Wallet on StudioNet. Ready to write.", "ok");
+  setStatus(`Connected with ${selected.name} on StudioNet.`, "ok");
 }
 
 function disconnectWallet() {
   state.account = null;
   state.writeClient = null;
+  state.provider = null;
   clearWallet();
   setDisconnectedUi();
   setStatus("Disconnected. Connect a wallet on StudioNet to write.");
+}
+
+async function restoreWallet() {
+  const stored = savedWallet();
+  if (!stored) {
+    await refreshStats();
+    return;
+  }
+  try {
+    const selected = pickProvider(localStorage.getItem(WALLET_RDNS_KEY));
+    const silent = await selected.provider.request({ method: "eth_accounts" });
+    if (!silent?.length) {
+      setDisconnectedUi();
+      await refreshStats();
+      return;
+    }
+    await connectWallet(stored, selected.rdns);
+  } catch {
+    setDisconnectedUi();
+  }
+  await refreshStats();
 }
 
 $("connect-btn").addEventListener("click", async () => {
@@ -205,16 +300,6 @@ $("disconnect-btn").addEventListener("click", () => {
   disconnectWallet();
 });
 
-if (window.ethereum) {
-  window.ethereum.on?.("accountsChanged", (accounts) => {
-    if (!accounts?.length) {
-      disconnectWallet();
-      return;
-    }
-    connectWallet(accounts[0]).catch((err) => setStatus(err.message || String(err), "err"));
-  });
-}
-
 $("create-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
@@ -227,7 +312,7 @@ $("create-form").addEventListener("submit", async (event) => {
     if (!DATE_RE.test(eventDate)) throw new Error("Event date must be YYYY-MM-DD.");
     const value = parseGen($("stake").value);
     setStatus("Submitting create_attestation…");
-    const hash = await write("create_attestation", [claim, eventDate, urlA, urlB], value);
+    const hash = await sendWrite("create_attestation", [claim, eventDate, urlA, urlB], value);
     showTx(hash);
     setStatus("Attestation submitted. Check the explorer, then lookup the next ID.", "ok");
     await refreshStats();
@@ -243,7 +328,7 @@ $("resolve-form").addEventListener("submit", async (event) => {
     const id = $("resolve-id").value.trim();
     if (!id) throw new Error("Attestation ID is required.");
     setStatus("Submitting resolve… validators will fetch both pages.");
-    const hash = await write("resolve", [id], 0n);
+    const hash = await sendWrite("resolve", [id], 0n);
     showTx(hash);
     setStatus("Resolve submitted.", "ok");
   } catch (err) {
@@ -267,19 +352,5 @@ $("lookup-form").addEventListener("submit", async (event) => {
     setStatus(err.message || String(err), "err");
   }
 });
-
-async function restoreWallet() {
-  const stored = savedWallet();
-  if (!stored || !window.ethereum) {
-    await refreshStats();
-    return;
-  }
-  try {
-    await connectWallet(stored);
-  } catch {
-    disconnectWallet();
-  }
-  await refreshStats();
-}
 
 restoreWallet();
