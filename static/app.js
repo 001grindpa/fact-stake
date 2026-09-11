@@ -56,6 +56,17 @@ function showTx(hash) {
   a.classList.remove("hidden");
 }
 
+function formButton(form) {
+  return form.querySelector("button[type='submit']");
+}
+
+function setBusy(button, on) {
+  if (!button) return;
+  button.disabled = on;
+  button.classList.toggle("loading", on);
+  button.setAttribute("aria-busy", on ? "true" : "false");
+}
+
 function parseGen(value) {
   const normalized = value.trim();
   if (!/^\d+(\.\d{1,18})?$/.test(normalized) || Number(normalized) <= 0) {
@@ -207,6 +218,7 @@ async function sendWrite(functionName, args, value = 0n) {
   console.log("[factstake] writeContract payload", {
     ...payload,
     value: value.toString(),
+    account: state.account,
     provider: {
       isMetaMask: Boolean(provider.isMetaMask),
       isOkxWallet: Boolean(provider.isOkxWallet || provider.isOKXWallet),
@@ -340,7 +352,9 @@ $("disconnect-btn").addEventListener("click", () => {
 
 $("create-form").addEventListener("submit", async (event) => {
   event.preventDefault();
+  const btn = formButton(event.currentTarget);
   try {
+    setBusy(btn, true);
     if (!state.account) await connectWallet();
     const claim = $("claim").value.trim();
     const eventDate = $("event-date").value.trim();
@@ -353,46 +367,58 @@ $("create-form").addEventListener("submit", async (event) => {
     setStatus("Submitting create_attestation…");
     const hash = await sendWrite("create_attestation", [claim, eventDate, urlA, urlB], value);
     showTx(hash);
-    setStatus("Attestation submitted. Check the explorer, then lookup the next ID.", "ok");
+    setStatus("Submitted. Wait for Accepted on the explorer before inspect.", "ok");
     await refreshStats();
   } catch (err) {
     console.error("[factstake] create failed", err);
     setStatus(err.message || String(err), "err");
+  } finally {
+    setBusy(btn, false);
   }
 });
 
 $("resolve-form").addEventListener("submit", async (event) => {
   event.preventDefault();
+  const btn = formButton(event.currentTarget);
   try {
+    setBusy(btn, true);
     if (!state.account) await connectWallet();
     const id = $("resolve-id").value.trim();
     if (!id) throw new Error("Attestation ID is required.");
     setStatus("Submitting resolve… validators will fetch both pages.");
     const hash = await sendWrite("resolve", [id], 0n);
     showTx(hash);
-    setStatus("Resolve submitted.", "ok");
+    setStatus("Resolve submitted. Wait for Accepted on the explorer.", "ok");
   } catch (err) {
     console.error("[factstake] resolve failed", err);
     setStatus(err.message || String(err), "err");
+  } finally {
+    setBusy(btn, false);
   }
 });
 
 $("lookup-form").addEventListener("submit", async (event) => {
   event.preventDefault();
+  const btn = formButton(event.currentTarget);
   const out = $("lookup-out");
+  const id = $("lookup-id").value.trim();
   try {
-    const id = $("lookup-id").value.trim();
+    setBusy(btn, true);
+    if (!id) throw new Error("Attestation ID is required.");
+    out.classList.remove("empty");
+    out.textContent = "Reading…";
+    setStatus(`Looking up attestation ${id}…`);
     const raw = await read("get_attestation", [id]);
     console.log("[factstake] lookup raw", raw);
     const parsed = parseMaybeJson(raw);
-    out.classList.remove("empty");
     out.textContent = JSON.stringify(parsed, null, 2);
     setStatus(`Loaded attestation ${id}.`, "ok");
   } catch (err) {
     console.error("[factstake] lookup failed", err);
-    out.classList.add("empty");
-    out.textContent = "No attestation loaded.";
+    out.textContent = err.message || String(err);
     setStatus(err.message || String(err), "err");
+  } finally {
+    setBusy(btn, false);
   }
 });
 

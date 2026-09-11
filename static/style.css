@@ -222,6 +222,33 @@ h1 {
     margin-top: 1.6rem;
 }
 
+button {
+  position: relative;
+}
+button:disabled {
+  cursor: wait;
+  filter: none;
+  opacity: 0.8;
+}
+button.loading {
+  color: transparent !important;
+}
+button.loading::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid rgba(26, 20, 8, 0.25);
+  border-top-color: var(--accent-ink);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 form {
     display: grid;
     gap: 0.8rem;
