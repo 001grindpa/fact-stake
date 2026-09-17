@@ -86,6 +86,14 @@ The current frontend is configured for:
 
 The contract source is [src/AttestLock.py](src/AttestLock.py). The browser client is [static/app.js](static/app.js), and the page entry point is [index.html](index.html).
 
+## Live conclusive resolve
+
+Contract: 0xAA0b63A0fa310C24307E18CB9D0a00f2E100ac08
+Attestation ID: 3
+Resolve tx: https://explorer-studio.genlayer.com/tx/0x752c703617bbb58691bb9e1c28fef6a846af24989577d70ce00337ea189ed6b1
+Result: ATTESTED (YES / YES)
+Consensus: Accepted
+
 ## Running locally
 
 This repository is a static frontend with no build step or package manifest. Serve the repository directory with any local HTTP server so that the ES module and wallet integration load correctly. For example:

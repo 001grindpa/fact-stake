@@ -346,14 +346,84 @@ footer a {
 }
 
 @media (max-width: 860px) {
+    .top {
+        padding: 0.9rem 5vw;
+        align-items: flex-start;
+    }
 
-    .board,
+    .brand-copy strong {
+        font-size: 0.82rem;
+    }
+
+    .brand-copy small {
+        display: none;
+    }
+
+    .mark img {
+        width: 46px;
+        height: 46px;
+    }
+
+    .top-actions {
+        gap: 0.45rem;
+    }
+
+    .pill {
+        padding: 0.28rem 0.56rem;
+        font-size: 0.68rem;
+    }
+
+    .hero,
     .stats,
+    .board,
+    .activity,
+    footer {
+        padding-left: 5vw;
+        padding-right: 5vw;
+    }
+
+    .hero {
+        padding-top: 2.7rem;
+        padding-bottom: 1.5rem;
+    }
+
+    h1 {
+        font-size: clamp(2.1rem, 12vw, 3.3rem);
+    }
+
+    .lede {
+        font-size: 0.98rem;
+    }
+
+    .stats,
+    .board,
     .row {
         grid-template-columns: 1fr;
     }
 
+    .stats {
+        gap: 0;
+    }
+
+    .panel {
+        padding: 1rem;
+    }
+
+    .activity {
+        padding-top: 1.8rem;
+    }
+
+    .tx {
+        display: inline;
+    }
+
     footer {
         flex-direction: column;
+        gap: 0.8rem;
+    }
+
+    footer nav {
+        flex-wrap: wrap;
+        row-gap: 0.5rem;
     }
 }
