@@ -1,7 +1,7 @@
 import { createClient } from "https://esm.sh/genlayer-js@0.18.0?bundle";
 import { studionet } from "https://esm.sh/genlayer-js@0.18.0/chains?bundle";
 
-const CONTRACT_ADDRESS = "0x65B4e18C0483937d71A4745bF0aA75e948229F5d";
+const CONTRACT_ADDRESS = "0xAA0b63A0fa310C24307E18CB9D0a00f2E100ac08";
 const RPC_URL = "https://studio.genlayer.com/api";
 const CHAIN_ID = studionet.id;
 const CHAIN_HEX = `0x${Number(CHAIN_ID).toString(16)}`;
@@ -11,14 +11,10 @@ const DATE_RE = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
 const WALLET_KEY = "factstake.wallet";
 const WALLET_RDNS_KEY = "factstake.wallet.rdns";
 
-console.log("[factstake] studionet", {
-  id: studionet?.id,
-  name: studionet?.name,
-  rpc: studionet?.rpcUrls,
-  consensusMainContract: studionet?.consensusMainContract,
-  consensusDataContract: studionet?.consensusDataContract,
-  keys: studionet ? Object.keys(studionet) : null,
-});
+const NEWS_HOSTS = ["bbc.com", "reuters.com", "apnews.com", "theguardian.com", "nytimes.com"];
+const SPORTS_HOSTS = ["espn.com", "skysports.com"];
+const WIKI_HOSTS = ["wikipedia.org"];
+const ORG_HOSTS = ["who.int", "un.org"];
 
 const state = {
   account: null,
@@ -33,11 +29,7 @@ window.addEventListener("eip6963:announceProvider", (event) => {
   const { info, provider } = event.detail || {};
   if (!provider || !info?.rdns) return;
   if (wallets.some((w) => w.rdns === info.rdns)) return;
-  wallets.push({
-    rdns: info.rdns,
-    name: info.name || info.rdns,
-    provider,
-  });
+  wallets.push({ rdns: info.rdns, name: info.name || info.rdns, provider });
 });
 window.dispatchEvent(new Event("eip6963:requestProvider"));
 
@@ -65,6 +57,44 @@ function setBusy(button, on) {
   button.disabled = on;
   button.classList.toggle("loading", on);
   button.setAttribute("aria-busy", on ? "true" : "false");
+}
+
+function formatTxError(err) {
+  return (
+    err?.shortMessage ||
+    err?.details ||
+    err?.cause?.shortMessage ||
+    err?.cause?.message ||
+    err?.message ||
+    String(err)
+  );
+}
+
+function receiptLooksFailed(receipt) {
+  if (!receipt || typeof receipt !== "object") return "";
+  const blob = JSON.stringify(receipt).toLowerCase();
+  if (
+    blob.includes("nondetexception") ||
+    blob.includes("traceback") ||
+    blob.includes("exit_code") ||
+    blob.includes("execution failed")
+  ) {
+    return "Resolve execution failed on-chain. Open the explorer link for the validator log.";
+  }
+  return "";
+}
+
+async function waitForWrite(hash) {
+  if (!state.writeClient?.waitForTransactionReceipt) return null;
+  try {
+    return await state.writeClient.waitForTransactionReceipt({
+      hash,
+      retries: 60,
+      interval: 3000,
+    });
+  } catch (err) {
+    throw new Error(formatTxError(err));
+  }
 }
 
 function parseGen(value) {
@@ -97,6 +127,125 @@ function parseMaybeJson(value) {
     }
   }
   return { raw: value };
+}
+
+function hostname(url) {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function rootDomain(host) {
+  const trimmed = host.startsWith("www.") ? host.slice(4) : host;
+  const parts = trimmed.split(".");
+  if (parts.length >= 2) return parts.slice(-2).join(".");
+  return trimmed;
+}
+
+function matchesHostList(host, list) {
+  const root = rootDomain(host);
+  return list.some((item) => root === item || host === item || host.endsWith("." + item));
+}
+
+function sourceFamily(url) {
+  const host = hostname(url);
+  if (!host) return "";
+  const root = rootDomain(host);
+  if (matchesHostList(host, WIKI_HOSTS)) return `wiki:${root}`;
+  if (matchesHostList(host, NEWS_HOSTS)) return `news:${root}`;
+  if (matchesHostList(host, SPORTS_HOSTS)) return `sports:${root}`;
+  if (matchesHostList(host, ORG_HOSTS)) return `org:${root}`;
+  if (host.endsWith(".europa.eu") || root === "europa.eu") return "gov:eu";
+  if (host.endsWith(".gov.uk")) return "gov:uk";
+  if (host.endsWith(".gouv.fr")) return "gov:fr";
+  if (host.endsWith(".gob.mx")) return "gov:mx";
+  if (host.endsWith(".gc.ca")) return "gov:ca";
+  if (host.endsWith(".gov")) return "gov:us";
+  if (host.endsWith(".int")) return "org:int";
+  return "";
+}
+
+function familyKind(family) {
+  return family.split(":")[0] || "";
+}
+
+function createFormErrors() {
+  const claim = $("claim").value.trim();
+  const eventDate = $("event-date").value.trim();
+  const urlA = $("url-a").value.trim();
+  const urlB = $("url-b").value.trim();
+  const stake = $("stake").value.trim();
+  const errors = [];
+
+  if (claim && claim.length < 12) errors.push("Claim must be at least 12 characters.");
+  if (eventDate && !DATE_RE.test(eventDate)) errors.push("Event date must be YYYY-MM-DD.");
+  if (stake) {
+    try {
+      parseGen(stake);
+    } catch (err) {
+      errors.push(err.message);
+    }
+  }
+
+  const urls = [
+    ["Official source A", urlA],
+    ["Official source B", urlB],
+  ];
+  const families = [];
+  const roots = [];
+  for (const [label, url] of urls) {
+    if (!url) continue;
+    if (!url.toLowerCase().startsWith("https://")) {
+      errors.push(`${label} must be an https URL.`);
+      continue;
+    }
+    const family = sourceFamily(url);
+    if (!family) {
+      errors.push(`${label} is not on the allowlist (news, sports, wiki, gov, org).`);
+      continue;
+    }
+    families.push(family);
+    roots.push(rootDomain(hostname(url)));
+  }
+
+  if (urlA && urlB && families.length === 2) {
+    if (roots[0] === roots[1]) {
+      errors.push("Sources must come from two different organizations.");
+    } else if (familyKind(families[0]) === familyKind(families[1])) {
+      errors.push(
+        `Both sources are ${familyKind(families[0])}. Use two families, e.g. Wikipedia + BBC, not BBC + Reuters.`
+      );
+    }
+  }
+
+  if (!claim || !eventDate || !urlA || !urlB || !stake) {
+    errors.push("Fill claim, date, both sources, and stake.");
+  }
+  return errors;
+}
+
+function syncCreateButton() {
+  const btn = formButton($("create-form"));
+  const hint = $("create-hint");
+  const errors = createFormErrors();
+  const blocking = errors.filter((msg) => msg !== "Fill claim, date, both sources, and stake.");
+  const incomplete = errors.includes("Fill claim, date, both sources, and stake.");
+  const locked = errors.length > 0;
+  if (btn && !btn.classList.contains("loading")) btn.disabled = locked;
+  if (hint) {
+    if (blocking.length) {
+      hint.hidden = false;
+      hint.textContent = blocking[0];
+    } else if (incomplete) {
+      hint.hidden = false;
+      hint.textContent = "Lock stays disabled until the form is complete and the two sources are independent families.";
+    } else {
+      hint.hidden = true;
+      hint.textContent = "";
+    }
+  }
 }
 
 function setConnectedUi(account) {
@@ -144,7 +293,6 @@ function injectedProviders() {
 
 function pickProvider(preferredRdns) {
   const list = injectedProviders();
-  console.log("[factstake] providers", list.map((w) => ({ rdns: w.rdns, name: w.name })));
   if (!list.length) throw new Error("No injected wallet found. Install MetaMask or OKX Wallet.");
   if (preferredRdns) {
     const match = list.find((w) => w.rdns === preferredRdns);
@@ -159,7 +307,6 @@ async function ensureNetwork(provider) {
   const injected = provider || state.provider || window.ethereum;
   if (!injected) throw new Error("No injected wallet found.");
   const current = await injected.request({ method: "eth_chainId" });
-  console.log("[factstake] wallet chainId", current, "expected", CHAIN_HEX, CHAIN_ID);
   if (Number.parseInt(String(current), 16) !== Number(CHAIN_ID)) {
     try {
       await injected.request({
@@ -190,7 +337,6 @@ async function ensureNetwork(provider) {
 
 async function read(method, args = []) {
   const account = state.account || ZERO;
-  console.log("[factstake] read", { method, args, account, contract: CONTRACT_ADDRESS });
   return state.readClient.readContract({
     address: CONTRACT_ADDRESS,
     functionName: method,
@@ -209,35 +355,15 @@ async function sendWrite(functionName, args, value = 0n) {
     account: state.account,
     provider,
   });
-  const payload = {
-    address: CONTRACT_ADDRESS,
-    functionName,
-    args,
-    value,
-  };
-  console.log("[factstake] writeContract payload", {
-    ...payload,
-    value: value.toString(),
-    account: state.account,
-    provider: {
-      isMetaMask: Boolean(provider.isMetaMask),
-      isOkxWallet: Boolean(provider.isOkxWallet || provider.isOKXWallet),
-    },
-  });
   try {
-    const hash = await state.writeClient.writeContract(payload);
-    console.log("[factstake] writeContract hash", hash);
-    return hash;
-  } catch (err) {
-    console.error("[factstake] writeContract error", err);
-    console.error("[factstake] writeContract error fields", {
-      message: err?.message,
-      shortMessage: err?.shortMessage,
-      details: err?.details,
-      metaMessages: err?.metaMessages,
-      cause: err?.cause,
+    return await state.writeClient.writeContract({
+      address: CONTRACT_ADDRESS,
+      functionName,
+      args,
+      value,
     });
-    throw err;
+  } catch (err) {
+    throw new Error(formatTxError(err));
   }
 }
 
@@ -248,12 +374,10 @@ async function refreshStats() {
       read("get_reserved_stakes"),
       read("get_retained_stakes"),
     ]);
-    console.log("[factstake] stats", { count, reserved, retained });
     $("stat-count").textContent = String(count ?? "0");
     $("stat-reserved").textContent = formatGen(reserved ?? 0);
     $("stat-retained").textContent = formatGen(retained ?? 0);
-  } catch (err) {
-    console.error("[factstake] stats error", err);
+  } catch {
     $("stat-count").textContent = "—";
     $("stat-reserved").textContent = "—";
     $("stat-retained").textContent = "—";
@@ -263,21 +387,18 @@ async function refreshStats() {
 function bindProviderEvents(provider) {
   if (!provider?.on) return;
   provider.on("accountsChanged", (accounts) => {
-    console.log("[factstake] accountsChanged", accounts);
     if (!accounts?.length) {
       disconnectWallet();
       return;
     }
-    connectWallet(accounts[0]).catch((err) => setStatus(err.message || String(err), "err"));
+    connectWallet(accounts[0]).catch((err) => setStatus(formatTxError(err), "err"));
   });
 }
 
 async function connectWallet(preferredAccount, preferredRdns) {
   const selected = pickProvider(preferredRdns || localStorage.getItem(WALLET_RDNS_KEY));
-  console.log("[factstake] connect with", selected.name, selected.rdns);
   const provider = selected.provider;
   const accounts = await provider.request({ method: "eth_requestAccounts" });
-  console.log("[factstake] accounts", accounts);
   if (!accounts?.length) throw new Error("No account returned.");
   const account =
     preferredAccount && accounts.some((a) => a.toLowerCase() === preferredAccount.toLowerCase())
@@ -290,11 +411,6 @@ async function connectWallet(preferredAccount, preferredRdns) {
     chain: studionet,
     account: state.account,
     provider,
-  });
-  console.log("[factstake] writeClient created", {
-    account: state.account,
-    clientAccount: state.writeClient?.account,
-    chainId: state.writeClient?.chain?.id,
   });
   persistWallet(state.account);
   localStorage.setItem(WALLET_RDNS_KEY, selected.rdns);
@@ -314,7 +430,6 @@ function disconnectWallet() {
 
 async function restoreWallet() {
   const stored = savedWallet();
-  console.log("[factstake] restore", stored);
   if (!stored) {
     await refreshStats();
     return;
@@ -322,27 +437,29 @@ async function restoreWallet() {
   try {
     const selected = pickProvider(localStorage.getItem(WALLET_RDNS_KEY));
     const silent = await selected.provider.request({ method: "eth_accounts" });
-    console.log("[factstake] silent accounts", silent);
     if (!silent?.length) {
       setDisconnectedUi();
       await refreshStats();
       return;
     }
     await connectWallet(stored, selected.rdns);
-  } catch (err) {
-    console.warn("[factstake] restore failed", err);
+  } catch {
     setDisconnectedUi();
   }
   await refreshStats();
 }
+
+["claim", "event-date", "url-a", "url-b", "stake"].forEach((id) => {
+  $(id)?.addEventListener("input", syncCreateButton);
+  $(id)?.addEventListener("change", syncCreateButton);
+});
 
 $("connect-btn").addEventListener("click", async () => {
   try {
     await connectWallet();
     await refreshStats();
   } catch (err) {
-    console.error("[factstake] connect click failed", err);
-    setStatus(err.message || String(err), "err");
+    setStatus(formatTxError(err), "err");
   }
 });
 
@@ -353,27 +470,34 @@ $("disconnect-btn").addEventListener("click", () => {
 $("create-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const btn = formButton(event.currentTarget);
+  const errors = createFormErrors();
+  if (errors.length) {
+    setStatus(errors[0], "err");
+    syncCreateButton();
+    return;
+  }
   try {
     setBusy(btn, true);
     if (!state.account) await connectWallet();
-    const claim = $("claim").value.trim();
-    const eventDate = $("event-date").value.trim();
-    const urlA = $("url-a").value.trim();
-    const urlB = $("url-b").value.trim();
-    if (claim.length < 12) throw new Error("Claim must be at least 12 characters.");
-    if (!DATE_RE.test(eventDate)) throw new Error("Event date must be YYYY-MM-DD.");
-    const value = parseGen($("stake").value);
-    console.log("[factstake] parsed stake", value.toString());
-    setStatus("Submitting create_attestation…");
-    const hash = await sendWrite("create_attestation", [claim, eventDate, urlA, urlB], value);
+    const hash = await sendWrite(
+      "create_attestation",
+      [
+        $("claim").value.trim(),
+        $("event-date").value.trim(),
+        $("url-a").value.trim(),
+        $("url-b").value.trim(),
+      ],
+      parseGen($("stake").value)
+    );
     showTx(hash);
-    setStatus("Submitted. Wait for Accepted on the explorer before inspect.", "ok");
+    setStatus("Submitted. Wait for Accepted, then inspect the new ID.", "ok");
+    await waitForWrite(hash);
     await refreshStats();
   } catch (err) {
-    console.error("[factstake] create failed", err);
-    setStatus(err.message || String(err), "err");
+    setStatus(formatTxError(err), "err");
   } finally {
     setBusy(btn, false);
+    syncCreateButton();
   }
 });
 
@@ -388,10 +512,22 @@ $("resolve-form").addEventListener("submit", async (event) => {
     setStatus("Submitting resolve… validators will fetch both pages.");
     const hash = await sendWrite("resolve", [id], 0n);
     showTx(hash);
-    setStatus("Resolve submitted. Wait for Accepted on the explorer.", "ok");
+    setStatus("Waiting for validators. A blocked source degrades to UNKNOWN instead of crashing.");
+    const receipt = await waitForWrite(hash);
+    const fail = receiptLooksFailed(receipt);
+    if (fail) throw new Error(fail);
+    try {
+      const parsed = parseMaybeJson(await read("get_attestation", [id]));
+      const status = parsed.status || "?";
+      const verdict = parsed.verdict || "?";
+      const ok = status === "ATTESTED" || status === "REJECTED";
+      setStatus(`Resolve finished. status=${status} verdict=${verdict}`, ok ? "ok" : "");
+    } catch {
+      setStatus("Resolve submitted. Inspect the ID after the tx is Accepted.", "ok");
+    }
+    await refreshStats();
   } catch (err) {
-    console.error("[factstake] resolve failed", err);
-    setStatus(err.message || String(err), "err");
+    setStatus(formatTxError(err), "err");
   } finally {
     setBusy(btn, false);
   }
@@ -407,19 +543,16 @@ $("lookup-form").addEventListener("submit", async (event) => {
     if (!id) throw new Error("Attestation ID is required.");
     out.classList.remove("empty");
     out.textContent = "Reading…";
-    setStatus(`Looking up attestation ${id}…`);
-    const raw = await read("get_attestation", [id]);
-    console.log("[factstake] lookup raw", raw);
-    const parsed = parseMaybeJson(raw);
+    const parsed = parseMaybeJson(await read("get_attestation", [id]));
     out.textContent = JSON.stringify(parsed, null, 2);
     setStatus(`Loaded attestation ${id}.`, "ok");
   } catch (err) {
-    console.error("[factstake] lookup failed", err);
-    out.textContent = err.message || String(err);
-    setStatus(err.message || String(err), "err");
+    out.textContent = formatTxError(err);
+    setStatus(formatTxError(err), "err");
   } finally {
     setBusy(btn, false);
   }
 });
 
+syncCreateButton();
 restoreWallet();

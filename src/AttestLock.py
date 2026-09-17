@@ -1,8 +1,10 @@
 # { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from genlayer import *
 from urllib.parse import urlparse
 
@@ -11,63 +13,66 @@ DATE_RE = r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
 HTTPS = "https://"
 MAX_PAGE_CHARS = 12000
 MIN_CLAIM_CHARS = 12
+SNAPSHOT_CHARS = 4000
 
-ALLOWED_HOSTS = (
+NEWS_HOSTS = (
     "bbc.com",
-    "www.bbc.com",
     "reuters.com",
-    "www.reuters.com",
     "apnews.com",
-    "www.apnews.com",
     "theguardian.com",
-    "www.theguardian.com",
     "nytimes.com",
-    "www.nytimes.com",
-    "espn.com",
-    "www.espn.com",
-    "skysports.com",
-    "www.skysports.com",
-    "en.wikipedia.org",
-    "wikipedia.org",
-    "sec.gov",
-    "www.sec.gov",
-    "nasa.gov",
-    "www.nasa.gov",
-    "who.int",
-    "www.who.int",
-    "un.org",
-    "www.un.org",
-    "europa.eu",
-    "www.europa.eu",
 )
+SPORTS_HOSTS = ("espn.com", "skysports.com")
+WIKI_HOSTS = ("wikipedia.org",)
+ORG_HOSTS = ("who.int", "un.org")
 
-ALLOWED_SUFFIXES = (
-    ".gov",
-    ".gov.uk",
-    ".gouv.fr",
-    ".gob.mx",
-    ".gc.ca",
-    ".europa.eu",
-    ".int",
-)
+
+def _today_utc() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
 def _host(url: str) -> str:
     return (urlparse(url).hostname or "").lower()
 
 
-def _host_allowed(url: str) -> bool:
+def _root(host: str) -> str:
+    host = host[4:] if host.startswith("www.") else host
+    parts = host.split(".")
+    if len(parts) >= 2:
+        return ".".join(parts[-2:])
+    return host
+
+
+def _source_family(url: str) -> str:
     host = _host(url)
-    if not host:
-        return False
-    for allowed in ALLOWED_HOSTS:
-        base = allowed[4:] if allowed.startswith("www.") else allowed
-        if host == allowed or host == base or host.endswith("." + base):
-            return True
-    for suffix in ALLOWED_SUFFIXES:
-        if host.endswith(suffix):
-            return True
-    return False
+    root = _root(host)
+    if any(root == item or host.endswith("." + item) for item in WIKI_HOSTS):
+        return "wiki:" + root
+    if any(root == item or host.endswith("." + item) for item in NEWS_HOSTS):
+        return "news:" + root
+    if any(root == item or host.endswith("." + item) for item in SPORTS_HOSTS):
+        return "sports:" + root
+    if any(root == item or host.endswith("." + item) for item in ORG_HOSTS):
+        return "org:" + root
+    if host.endswith(".europa.eu") or root == "europa.eu":
+        return "gov:eu"
+    if host.endswith(".gov.uk"):
+        return "gov:uk"
+    if host.endswith(".gouv.fr"):
+        return "gov:fr"
+    if host.endswith(".gob.mx"):
+        return "gov:mx"
+    if host.endswith(".gc.ca"):
+        return "gov:ca"
+    if host.endswith(".gov"):
+        return "gov:us"
+    if host.endswith(".int"):
+        return "org:int"
+    return ""
+
+
+def _host_allowed(url: str) -> bool:
+    return _source_family(url) != ""
 
 
 def _require_https_url(url: str, label: str) -> str:
@@ -77,6 +82,23 @@ def _require_https_url(url: str, label: str) -> str:
     if not _host_allowed(cleaned):
         raise gl.vm.UserError(f"{label} host is not an allowed official source")
     return cleaned
+
+
+def _require_independent_sources(url_a: str, url_b: str) -> None:
+    if _host(url_a) == _host(url_b) or _root(_host(url_a)) == _root(_host(url_b)):
+        raise gl.vm.UserError("sources must come from two different organizations")
+    fam_a = _source_family(url_a)
+    fam_b = _source_family(url_b)
+    kind_a = fam_a.split(":")[0]
+    kind_b = fam_b.split(":")[0]
+    if kind_a == kind_b:
+        raise gl.vm.UserError(
+            "sources must be from two different families (news, sports, wiki, gov, org)"
+        )
+
+
+def _digest(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()
 
 
 def _pay(to: Address, amount: u256) -> None:
@@ -97,6 +119,10 @@ class Attestation:
     status: str
     verdict: str
     funds_disposition: str
+    snapshot_hash_a: str
+    snapshot_hash_b: str
+    snapshot_at: str
+    resolve_note: str
 
 
 class AttestLock(gl.Contract):
@@ -119,9 +145,23 @@ class AttestLock(gl.Contract):
         return self.attestations[attestation_id]
 
     def _extract_page(self, url: str, claim: str, event_date: str) -> dict:
-        raw = gl.nondet.web.render(url, mode="text")
-        page_text = raw if isinstance(raw, str) else str(raw)
-        page_text = page_text[:MAX_PAGE_CHARS]
+        empty = {
+            "date_match": False,
+            "related": False,
+            "answer": "UNKNOWN",
+            "snapshot_hash": "",
+            "fetch_ok": False,
+            "error": "",
+        }
+        try:
+            raw = gl.nondet.web.render(url, mode="text")
+            page_text = raw if isinstance(raw, str) else str(raw)
+            page_text = page_text[:MAX_PAGE_CHARS]
+        except Exception:
+            empty["error"] = "fetch_failed"
+            return empty
+
+        snapshot_hash = _digest(page_text[:SNAPSHOT_CHARS])
         prompt = f"""
 Decide whether one official public page supports a dated factual claim.
 
@@ -138,18 +178,17 @@ Return JSON only with exactly these fields:
   "related": true or false,
   "answer": "YES" or "NO" or "UNKNOWN"
 }}
-
-Rules:
-- date_match is true only if the page is about that calendar day.
-- related is true only if the page is about the same fact as the claim.
-- answer is YES if the page clearly supports that the claim is true.
-- answer is NO if the page clearly supports that the claim is false.
-- answer is UNKNOWN if the page is incomplete, off-topic, undated, or inconclusive.
-- Do not include any other keys or commentary.
 """
-        parsed = gl.nondet.exec_prompt(prompt, response_format="json")
-        if isinstance(parsed, str):
-            parsed = json.loads(parsed)
+        try:
+            parsed = gl.nondet.exec_prompt(prompt, response_format="json")
+            if isinstance(parsed, str):
+                parsed = json.loads(parsed)
+        except Exception:
+            empty["snapshot_hash"] = snapshot_hash
+            empty["fetch_ok"] = True
+            empty["error"] = "llm_failed"
+            return empty
+
         date_match = bool(parsed.get("date_match", False))
         related = bool(parsed.get("related", False))
         answer = str(parsed.get("answer", "UNKNOWN")).upper()
@@ -161,6 +200,9 @@ Rules:
             "date_match": date_match,
             "related": related,
             "answer": answer,
+            "snapshot_hash": snapshot_hash,
+            "fetch_ok": True,
+            "error": "",
         }
 
     def _adjudicate(self, item: Attestation) -> dict:
@@ -168,7 +210,9 @@ Rules:
             page_a = self._extract_page(item.source_url_a, item.claim, item.event_date)
             page_b = self._extract_page(item.source_url_b, item.claim, item.event_date)
             if (
-                not page_a["date_match"]
+                not page_a["fetch_ok"]
+                or not page_b["fetch_ok"]
+                or not page_a["date_match"]
                 or not page_b["date_match"]
                 or not page_a["related"]
                 or not page_b["related"]
@@ -187,6 +231,12 @@ Rules:
                 "related_b": page_b["related"],
                 "answer_a": page_a["answer"],
                 "answer_b": page_b["answer"],
+                "snapshot_hash_a": page_a["snapshot_hash"],
+                "snapshot_hash_b": page_b["snapshot_hash"],
+                "fetch_ok_a": page_a["fetch_ok"],
+                "fetch_ok_b": page_b["fetch_ok"],
+                "error_a": page_a["error"],
+                "error_b": page_b["error"],
                 "verdict": verdict,
             }
             return json.dumps(payload, sort_keys=True)
@@ -208,8 +258,7 @@ Rules:
             raise gl.vm.UserError("event_date must be YYYY-MM-DD")
         url_a = _require_https_url(source_url_a, "source_url_a")
         url_b = _require_https_url(source_url_b, "source_url_b")
-        if _host(url_a) == _host(url_b):
-            raise gl.vm.UserError("sources must come from two different hosts")
+        _require_independent_sources(url_a, url_b)
         stake = gl.message.value
         if stake == u256(0):
             raise gl.vm.UserError("stake must be greater than zero")
@@ -225,6 +274,10 @@ Rules:
             status="OPEN",
             verdict="",
             funds_disposition="RESERVED",
+            snapshot_hash_a="",
+            snapshot_hash_b="",
+            snapshot_at="",
+            resolve_note="",
         )
         self.next_attestation_id = self.next_attestation_id + u256(1)
         self.reserved_stakes = self.reserved_stakes + stake
@@ -242,10 +295,11 @@ Rules:
             raise gl.vm.UserError("only the attester can update sources")
         if item.status != "OPEN":
             raise gl.vm.UserError("only an open attestation can change sources")
+        if _today_utc() >= item.event_date:
+            raise gl.vm.UserError("sources are frozen on and after event_date")
         url_a = _require_https_url(source_url_a, "source_url_a")
         url_b = _require_https_url(source_url_b, "source_url_b")
-        if _host(url_a) == _host(url_b):
-            raise gl.vm.UserError("sources must come from two different hosts")
+        _require_independent_sources(url_a, url_b)
         item.source_url_a = url_a
         item.source_url_b = url_b
         self.attestations[attestation_id] = item
@@ -257,6 +311,8 @@ Rules:
             raise gl.vm.UserError("only the attester can cancel")
         if item.status != "OPEN":
             raise gl.vm.UserError("only an open attestation can be cancelled")
+        if _today_utc() >= item.event_date:
+            raise gl.vm.UserError("cancel is closed on and after event_date")
         stake = item.stake
         item.status = "CANCELLED"
         item.funds_disposition = "REFUNDED_TO_ATTESTER"
@@ -269,9 +325,15 @@ Rules:
         item = self._get(attestation_id)
         if item.status != "OPEN":
             raise gl.vm.UserError("attestation must be OPEN to resolve")
+        if _today_utc() < item.event_date:
+            raise gl.vm.UserError("attestation cannot be resolved before event_date")
         result = self._adjudicate(item)
         verdict = str(result.get("verdict", "UNKNOWN")).upper()
         stake = item.stake
+        item.snapshot_hash_a = str(result.get("snapshot_hash_a", ""))
+        item.snapshot_hash_b = str(result.get("snapshot_hash_b", ""))
+        item.snapshot_at = _today_utc()
+        item.resolve_note = str(result.get("error_a", "")) + "|" + str(result.get("error_b", ""))
 
         if verdict == "YES":
             item.status = "ATTESTED"
@@ -306,6 +368,10 @@ Rules:
                 "status": item.status,
                 "verdict": item.verdict,
                 "funds_disposition": item.funds_disposition,
+                "snapshot_hash_a": item.snapshot_hash_a,
+                "snapshot_hash_b": item.snapshot_hash_b,
+                "snapshot_at": item.snapshot_at,
+                "resolve_note": item.resolve_note,
             },
             sort_keys=True,
         )
