@@ -27,6 +27,15 @@ WIKI_HOSTS = ("wikipedia.org",)
 ORG_HOSTS = ("who.int", "un.org")
 
 
+@gl.evm.contract_interface
+class _Recipient:
+    class View:
+        pass
+
+    class Write:
+        pass
+
+
 def _today_utc() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
@@ -104,7 +113,7 @@ def _digest(text: str) -> str:
 def _pay(to: Address, amount: u256) -> None:
     if amount == 0:
         return
-    gl.get_contract_at(to).emit_transfer(value=amount, on="finalized")
+    _Recipient(to).emit_transfer(value=amount)
 
 
 @allow_storage

@@ -81,16 +81,16 @@ The current frontend is configured for:
 - **Network:** GenLayer StudioNet
 - **Chain ID:** `61999` (`0xf22f`)
 - **RPC:** `https://studio.genlayer.com/api`
-- **Contract:** `0xAA0b63A0fa310C24307E18CB9D0a00f2E100ac08`
-- **Explorer:** [StudioNet contract](https://explorer-studio.genlayer.com/address/0xAA0b63A0fa310C24307E18CB9D0a00f2E100ac08)
+- **Contract:** `0xC30d94F19d77cA674E0B883Ef0e9112A947aB694`
+- **Explorer:** [StudioNet contract](https://explorer-studio.genlayer.com/address/0xC30d94F19d77cA674E0B883Ef0e9112A947aB694)
 
 The contract source is [src/AttestLock.py](src/AttestLock.py). The browser client is [static/app.js](static/app.js), and the page entry point is [index.html](index.html).
 
 ## Live conclusive resolve
 
-Contract: 0xAA0b63A0fa310C24307E18CB9D0a00f2E100ac08
-Attestation ID: 3
-Resolve tx: https://explorer-studio.genlayer.com/tx/0x752c703617bbb58691bb9e1c28fef6a846af24989577d70ce00337ea189ed6b1
+Contract: 0xC30d94F19d77cA674E0B883Ef0e9112A947aB694
+Attestation ID: 1
+Resolve tx: https://explorer-studio.genlayer.com/tx/0x36c5b4f860dab2d3b86153b2caebebf404df16fe9c5707032427abe71167b30b
 Result: ATTESTED (YES / YES)
 Consensus: Accepted
 

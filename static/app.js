@@ -1,7 +1,7 @@
 import { createClient } from "https://esm.sh/genlayer-js@0.18.0?bundle";
 import { studionet } from "https://esm.sh/genlayer-js@0.18.0/chains?bundle";
 
-const CONTRACT_ADDRESS = "0xAA0b63A0fa310C24307E18CB9D0a00f2E100ac08";
+const CONTRACT_ADDRESS = "0xC30d94F19d77cA674E0B883Ef0e9112A947aB694";
 const RPC_URL = "https://studio.genlayer.com/api";
 const CHAIN_ID = studionet.id;
 const CHAIN_HEX = `0x${Number(CHAIN_ID).toString(16)}`;
